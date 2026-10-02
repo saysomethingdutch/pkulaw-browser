@@ -1,0 +1,11 @@
+interface:
+  display_name: "PKULAW / WKINFO Browser"
+  short_description: "Search 北大法宝 and 威科先行 with scripts, never with screenshots"
+  default_prompt: |
+    Use $pkulaw-browser to read 北大法宝/PKULAW and 威科先行/WKINFO.
+    Run scripts/pkulaw_doctor.py first; it says whether the session works and what to run if not.
+    Pass --provider pkulaw or --provider wkinfo to every script. PKULAW is always headful.
+    Prefer --format rows for lists and --fields for single documents; payloads go to files, not into the conversation.
+    Branch on exit codes: 2/3 login, 4 browser, 5 anti-bot, 6 validation, 7 full text withheld.
+    Never fetch either site directly, and never fall back to computer-use or any screenshot/click browsing —
+    if scripts/pkulaw_fetch.py --chrome-copy also fails, stop and report the command the user should run.
