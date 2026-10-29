@@ -162,6 +162,34 @@ python pkulaw_api.py --reason "劳动关系 确认 存在 注销" `
 北大法宝**必须开着可见窗口**，无头模式只会拿到反爬页面。脚本会自动强制，不用你操心，
 但看到窗口弹出来是正常的。
 
+### 6. 人民法院案例库（指导性案例、参考案例）
+
+`rmfyalk.court.gov.cn` 是最高法自己的案例库，不是裁判文书网。只用 `rmfyalk_api.py` 查。
+
+登录一次（手机号+密码、支付宝或钉钉都行，必须你本人操作）：
+
+```powershell
+python pkulaw_chrome.py --login rmfyalk
+python pkulaw_chrome.py --save-state rmfyalk
+```
+
+之后不用再管：登录态闲置约 1 小时会失效，但只要法院统一账户的会话还在，脚本会自动
+重新拿一个，不用输密码。实在续不上，会以 `exit 3` 退出，并告诉你重新登录。
+
+```powershell
+# 先看命中量，分指导性/参考各多少
+python rmfyalk_api.py --search "劳动关系" --count-only
+# 只搜裁判理由、只要参考案例、只要北京的，并打印每条的裁判要旨
+python rmfyalk_api.py --reason "事实劳动关系" --lib ck --court 北京市 --frag
+# 按入库编号或案号取一篇，只要需要的部分
+python rmfyalk_api.py --no 2024-12-3-007-006 --fields 裁判要旨,裁判理由
+python rmfyalk_api.py --case-no "（2022）京02行终909号" --fields all
+```
+
+- **引用前分清两类**：指导性案例「应当参照」，参考案例只是「参考」。每条结果的 `type` 写明了是哪一类。
+- **用入库编号引用**：结果里的 `id` 每次请求都会变，不能用来认案子。
+- 「关联索引」里附有一审、二审案号；要引原判决原文，拿这些案号去法宝或威科查。
+
 ---
 
 ## 五、退出码：出错时看这个

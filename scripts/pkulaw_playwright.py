@@ -296,6 +296,10 @@ def main() -> int:
             detected = provider_for_url(probe)
             if detected is not None:
                 provider = detected
+        if provider.api_script:
+            print(f"pkulaw_playwright.py: {provider.name} renders everything from a JSON API — "
+                  f"use {provider.api_script}", file=sys.stderr)
+            return common.EXIT_ERROR
         library = provider.normalize_library(args.library)
     except ValueError as exc:
         build_parser().error(str(exc))

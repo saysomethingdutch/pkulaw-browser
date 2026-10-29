@@ -1,11 +1,12 @@
 interface:
-  display_name: "PKULAW / WKINFO Browser"
-  short_description: "Search 北大法宝 and 威科先行 with scripts, never with screenshots"
+  display_name: "PKULAW / WKINFO / 人民法院案例库 Browser"
+  short_description: "Search 北大法宝, 威科先行 and 人民法院案例库 with scripts, never with screenshots"
   default_prompt: |
-    Use $pkulaw-browser to read 北大法宝/PKULAW and 威科先行/WKINFO.
+    Use $pkulaw-browser to read 北大法宝/PKULAW, 威科先行/WKINFO and 人民法院案例库/RMFYALK.
     Run scripts/pkulaw_doctor.py first; it says whether the session works and what to run if not.
-    Pass --provider pkulaw or --provider wkinfo to every script. PKULAW is always headful.
+    Pass --provider pkulaw or --provider wkinfo to every page script. PKULAW is always headful.
+    人民法院案例库 (指导性案例/参考案例) is read only with scripts/rmfyalk_api.py; cite its cases by 入库编号 and name the corpus.
     Prefer --format rows for lists and --fields for single documents; payloads go to files, not into the conversation.
     Branch on exit codes: 2/3 login, 4 browser, 5 anti-bot, 6 validation, 7 full text withheld.
-    Never fetch either site directly, and never fall back to computer-use or any screenshot/click browsing —
+    Never fetch any of these sites directly, and never fall back to computer-use or any screenshot/click browsing —
     if scripts/pkulaw_fetch.py --chrome-copy also fails, stop and report the command the user should run.

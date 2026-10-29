@@ -18,9 +18,22 @@ import common
 from providers import PROVIDERS, get_provider
 
 
+def chromium_status() -> str:
+    """Name the pinned build, not just "some chromium-* exists" — the drift case
+    is exactly the one where a directory exists and no launch works without the
+    fallback in common.with_chromium_fallback."""
+    want = common.expected_chromium_revision()
+    have = sorted({rev for kind in (True, False) for rev, _ in common.installed_chromium_builds(kind)},
+                  reverse=True)
+    if not have:
+        return f"missing — playwright install chromium into {common.BROWSERS_PATH}"
+    if want and int(want) not in have:
+        return f"pinned build {want} absent, installed {have[0]} — scripts fall back to it"
+    return f"installed (build {want or have[0]})"
+
+
 def check_env(port: int) -> tuple[dict, bool]:
     info = common.cdp_alive(port)
-    chromium = common.has_local_chromium(common.BROWSERS_PATH)
     try:
         import browser_cookie3  # noqa: F401
         cookie3 = True
@@ -30,7 +43,7 @@ def check_env(port: int) -> tuple[dict, bool]:
         "state-root": common.STATE_ROOT,
         "chrome-cdp": (f"running {info.get('Browser', '?')} on :{port}" if info
                        else f"not running (:{port})"),
-        "chromium": "installed" if chromium else f"missing — playwright install chromium into {common.BROWSERS_PATH}",
+        "chromium": chromium_status(),
         "chrome-app": "present" if pathlib.Path(common.DEFAULT_CHROME).exists() else "MISSING",
         "browser_cookie3": "installed" if cookie3 else "missing — pip install browser_cookie3",
     }
@@ -69,9 +82,12 @@ def check_provider(provider, attach_up: bool, live: bool, args) -> tuple[dict, b
 
     if usable:
         nxt = ""
+    elif provider.name == "rmfyalk" and state["level"] == "suspect":
+        # Token cookie dead, SSO cookie still there: no human needed yet.
+        nxt = "python3 rmfyalk_api.py --refresh   # re-mints the token from the 统一账户 SSO cookie"
     elif live_ok is False:
-        nxt = (f"python3 pkulaw_chrome.py --login {provider.name}" if provider.name == "wkinfo"
-               else "python3 pkulaw_login.py --provider pkulaw   # CARSI, no intranet needed")
+        nxt = ("python3 pkulaw_login.py --provider pkulaw   # CARSI, no intranet needed"
+               if provider.name == "pkulaw" else f"python3 pkulaw_chrome.py --login {provider.name}")
     elif attach_up:
         nxt = f"python3 pkulaw_doctor.py --provider {provider.name} --live   # confirm that Chrome is logged in"
     elif state["level"] == "suspect":
@@ -94,9 +110,11 @@ def probe_live(provider, args) -> tuple[bool, str]:
                 try:
                     page.goto(provider.probe_url, wait_until="domcontentloaded", timeout=60000)
                     page.wait_for_timeout(4000)
+                    # Body first: if a redirect lands mid-read, title and URL
+                    # must come from the page the body came from.
+                    body = common.read_body(page)
                     verdict, _note = common.classify_navigation(
-                        provider, provider.probe_url, page.title(), page.url,
-                        page.locator("body").inner_text(timeout=15000),
+                        provider, provider.probe_url, page.title(), page.url, body,
                     )
                 finally:
                     try:

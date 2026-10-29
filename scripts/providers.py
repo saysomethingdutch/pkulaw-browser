@@ -61,6 +61,13 @@ class Provider:
     allow_direct_fetch: bool = False
     # Detail pages that open via target=_blank; drive them by URL, not by clicking.
     opens_detail_in_new_tab: bool = False
+    # Where pkulaw_chrome.py --login opens the window ("" = home_url), and what
+    # to tell the user to do there.
+    login_url: str = ""
+    login_hint: str = ""
+    # Sites whose pages carry no content (a JSON API renders everything); the
+    # DOM extractor refuses them and points at the provider's API script.
+    api_script: str = ""
     notes: list[str] = field(default_factory=list)
 
     def normalize_library(self, value: str) -> str:
@@ -339,6 +346,149 @@ wkinfo_court_tree_url = wkinfo_filtertree_url
 
 
 # --------------------------------------------------------------------------
+# RMFYALK / 人民法院案例库 (rmfyalk.court.gov.cn)
+# --------------------------------------------------------------------------
+# The Supreme People's Court case library — NOT 裁判文书网. Two corpora that
+# carry different weight: 指导性案例 (cpws_al_type 01, courts 应当参照) and
+# 参考案例 (02, 参考); ~5,600 cases in 2026-10. jQuery pages over a JSON API
+# under /cpws_al_api/api/; the HTML holds nothing worth reading, so the reader
+# is rmfyalk_api.py, never the DOM extractor. Everything below was observed
+# live on 2026-10-29.
+#
+# Login: OAuth through 人民法院互联网统一账户 (account.court.gov.cn, client_id
+# CBS_FYALK_0) — 手机号+密码, 支付宝 or 钉钉, by hand. It lands as a JWT in the
+# host-only cookie `faxin-cpws-al-token`: JWT exp ~4h after issue, cookie expiry
+# 1h, slid forward by every API call. The page JS also sends the token as a
+# `faxin-cpws-al-token` header — verified unnecessary, the cookie authorises.
+# `HOLDONKEY` (account.court.gov.cn, session cookie) is the SSO session. While
+# it lives, the OAuth redirect comes straight back with a code and mints a new
+# token: no password, works headless. Its server-side lifetime is unmeasured.
+#
+# Logged out, every API answers HTTP 200 with {"code":401,"msg":"未登录"} — no
+# redirect and no HTML, so only the JSON code tells you. Pages redirect to
+# account.court.gov.cn instead.
+#
+# Document ids (`id`, `cpws_al_id`) are re-encrypted on every response: the same
+# case comes back with a different id each call, and old ids still resolve.
+# Cite and dedupe by 入库编号 (cpws_al_no, e.g. 2024-12-3-007-006); searching
+# it with field `albh` returns exactly that case.
+
+RMFYALK_API = "https://rmfyalk.court.gov.cn/cpws_al_api/api/"
+RMFYALK_HOME = "https://rmfyalk.court.gov.cn/"
+RMFYALK_LIST = "https://rmfyalk.court.gov.cn/view/list.html"
+
+RMFYALK_LIBS = {"all": "cpwsAl_qb", "zdx": "cpwsAl_01", "ck": "cpwsAl_02"}
+RMFYALK_TYPES = {"01": "指导性案例", "02": "参考案例", "04": "特色案事例"}
+
+# selectValue codes of the 一般检索 dropdown. Several (field, terms) pairs in one
+# body are ANDed — that is the site's own 结果中检索.
+RMFYALK_SEARCH_FIELDS = {
+    "qw": "全文", "title": "标题", "albh": "案例编号", "keyword": "关键词",
+    "jbaq": "基本案情", "cply": "裁判理由", "cprq": "裁判日期",
+}
+
+RMFYALK_SORTS = {
+    "relevance": "", "no-desc": "-cpws_al_no", "no-asc": "+cpws_al_no",
+    "date-desc": "-cpws_al_zs_date", "date-asc": "+cpws_al_zs_date",
+}
+
+# Facet -> (searchParams key, cluster endpoint). A cluster call takes the search
+# body plus `pdh` (parent key, 0 = top level) and returns that node's children
+# that have hits *under the current query*, with counts — and the parent itself
+# as one of the entries. A parent key covers its children (北京市 "02" = every
+# Beijing court). One value per key: "02,04" returned 24, i.e. neither OR (44)
+# nor AND (0), so never comma-join.
+RMFYALK_FACETS = {
+    "court": ("slfy_id_cpwsAl", "slfyNextLeftCluster"),
+    "cause": ("sort_id_cpwsAl", "sortNextLeftCluster"),
+    "level": ("fyjb_id_cpwsAl", "fyjbNextLeftCluster"),
+    "procedure": ("slcx_id_cpwsAl", "slcxNextLeftCluster"),
+    "year": ("year_cpwsAl", "yearNextLeftCluster"),
+    "keyword": ("keyword_cpwsAl", "keywordNextLeftCluster"),
+}
+
+# 高级检索 keys that take free text rather than a facet code.
+RMFYALK_CASE_NO_KEY = "cpws_al_ajzh"
+
+
+def rmfyalk_build_search_body(
+    terms: list[tuple[str, str]],
+    lib: str = "all",
+    page: int = 1,
+    size: int = 10,
+    fuzzy: bool = False,
+    sort: str = "relevance",
+    filters: dict[str, str] | None = None,
+) -> dict:
+    """The JSON body POSTed to cpwsAl/search and to every cluster endpoint.
+
+    terms: [(field, text)] with field from RMFYALK_SEARCH_FIELDS; ANDed.
+    filters: {searchParams key: value}, facet codes or the 案号 text.
+    """
+    sp = {
+        "userSearchType": 2 if fuzzy else 1,     # 1 精确检索, 2 模糊检索
+        "isAdvSearch": "0",
+        "selectValue": [f for f, _ in terms] if terms else "qw",
+        "lib": RMFYALK_LIBS[lib],
+        "sort_field": RMFYALK_SORTS[sort],
+    }
+    if terms:
+        sp["keyTitle"] = [t for _, t in terms]
+    sp.update(filters or {})
+    # 案号 is a 高级检索 field. Sent with isAdvSearch "0" it is silently ignored and
+    # the whole corpus comes back (5622 of 5622). In advanced mode keyTitle means
+    # 标题 rather than the general fields, and pairing it with selectValue returns
+    # nothing at all — so a 案号 search carries no terms. Substrings match
+    # (京02行终 -> 6).
+    if RMFYALK_CASE_NO_KEY in sp:
+        if terms:
+            raise ValueError("a 案号 search cannot be combined with term searches")
+        sp["isAdvSearch"] = "1"
+    return {"page": page, "size": size, "lib": "qb", "searchParams": sp}
+
+
+# Content fields, and what the page calls each one. The label depends on the
+# corpus and on 执行/调解 cases (cpws_al_case_sort_id A0501 / A06), exactly as
+# content.js renders them, so a quoted section keeps its real heading.
+RMFYALK_CONTENT_FIELDS = ["cpyz", "jbaq", "cpjg", "cply", "glsy", "aljz"]
+
+RMFYALK_FIELD_ALIASES = {
+    "cpyz": "cpyz", "要旨": "cpyz", "要点": "cpyz", "裁判要旨": "cpyz", "裁判要点": "cpyz",
+    "执行要旨": "cpyz", "执行实施要点": "cpyz", "调解指引": "cpyz",
+    "jbaq": "jbaq", "案情": "jbaq", "基本案情": "jbaq",
+    "cpjg": "cpjg", "结果": "cpjg", "裁判结果": "cpjg", "执行结果": "cpjg",
+    "cply": "cply", "理由": "cply", "裁判理由": "cply", "执行理由": "cply", "调解结果": "cply",
+    "glsy": "glsy", "法条": "glsy", "相关法条": "glsy", "关联索引": "glsy",
+    "aljz": "aljz", "案例价值": "aljz",
+}
+
+
+def rmfyalk_section_labels(doc: dict) -> dict[str, str]:
+    """{content field: heading the site shows for it} for one document."""
+    guiding = doc.get("cpws_al_type") == "01"
+    sorts = " ".join(doc.get("cpws_al_case_sort_id") or [])
+    labels = {
+        "cpyz": "裁判要点" if guiding else "裁判要旨",
+        "jbaq": "基本案情", "cpjg": "裁判结果", "cply": "裁判理由",
+        "glsy": "相关法条" if guiding else "关联索引", "aljz": "案例价值",
+    }
+    if "A0501" in sorts:
+        labels.update(cpyz="执行实施要点" if guiding else "执行要旨", cpjg="执行结果", cply="执行理由")
+    elif "A06" in sorts and not guiding:
+        labels.update(cpyz="调解指引", cply="调解结果")
+    return labels
+
+
+def rmfyalk_detect_login_gate(title: str, final_url: str, body_text: str) -> bool:
+    """Page-level gate. The API-level one is the JSON code 401 (rmfyalk_api.py)."""
+    if "account.court.gov.cn" in urlparse(final_url).netloc.lower():
+        return True
+    if "统一账户管理平台" in title:
+        return True
+    return "您还未登录，请先" in body_text
+
+
+# --------------------------------------------------------------------------
 
 CASE_SECTIONS = [
     "案由", "案号", "审理法院", "审理程序", "裁判日期", "发布日期", "当事人",
@@ -381,6 +531,7 @@ PROVIDERS: dict[str, Provider] = {
         section_headers={"case": CASE_SECTIONS, "law": LAW_SECTIONS},
         force_headful=True,
         allow_direct_fetch=False,
+        login_hint="use CARSI",
         notes=[
             "Headless runs get an anti-bot 安全提示 shell (~197 bytes), never real results.",
             "Full case text often needs the Chrome view-source fallback.",
@@ -425,10 +576,50 @@ PROVIDERS: dict[str, Provider] = {
         force_headful=False,
         allow_direct_fetch=False,
         opens_detail_in_new_tab=True,
+        login_hint="click the 威科先行 one-click login on the intranet page",
         notes=[
             "Serves real pages to headless automation, so headless is the default here.",
             "Detail pages render full text in the DOM; no view-source needed.",
             "Login comes via the firm intranet (NTLM) — attach to real Chrome rather than reproducing SSO.",
+        ],
+    ),
+    "rmfyalk": Provider(
+        name="rmfyalk",
+        home_url=RMFYALK_HOME,
+        state_path=STATE_ROOT / "rmfyalk_state.json",
+        profile_dir=PROFILES / "rmfyalk",
+        library_aliases={"case": "case", "all": "case", "qb": "case", "zdx": "case", "ck": "case"},
+        # The list page reads its query from the URL. Kept for parity and for a
+        # human to open; scripts go through rmfyalk_api.py.
+        build_search_url=lambda keywords, library, search_keyword_type, **_: (
+            f"{RMFYALK_LIST}?isAdvSearch=0&key={search_keyword_type}"
+            f"&keyName={urllib.parse.quote(RMFYALK_SEARCH_FIELDS.get(search_keyword_type, '全文'))}"
+            f"&value={urllib.parse.quote(keywords)}&lib=cpwsAl_qb&searchType=1"
+        ),
+        detect_login_gate=rmfyalk_detect_login_gate,
+        # The bare list page: logged out it redirects to account.court.gov.cn,
+        # logged in it renders. A URL query would also write a search-history
+        # entry into the user's account on every probe.
+        probe_url=RMFYALK_LIST,
+        default_keyword_type={"case": "qw"},
+        session_cookies=["faxin-cpws-al-token", "HOLDONKEY"],
+        # Token dead + HOLDONKEY present reads as "suspect", which is right:
+        # rmfyalk_api.py --refresh can usually mint a new token from it.
+        primary_cookies=["faxin-cpws-al-token", "HOLDONKEY"],
+        detail_href_pattern={"case": r"content\.html\?id="},
+        row_selector={"case": "ul.al-list > li"},
+        section_headers={"case": ["裁判要点", "裁判要旨", "基本案情", "裁判结果", "裁判理由",
+                                  "相关法条", "关联索引", "案例价值"]},
+        force_headful=False,
+        allow_direct_fetch=False,
+        opens_detail_in_new_tab=True,
+        login_url=RMFYALK_LIST,
+        login_hint="人民法院互联网统一账户: 手机号+密码, 支付宝 or 钉钉",
+        api_script="rmfyalk_api.py",
+        notes=[
+            "Headless works, logged in or out; the WZWS WAF in front did not object.",
+            "Logged-out API calls are HTTP 200 + JSON code 401, never a redirect.",
+            "Session: ~1h idle, ~4h hard; rmfyalk_api.py re-mints it from HOLDONKEY.",
         ],
     ),
 }
@@ -447,4 +638,6 @@ def provider_for_url(url: str) -> Provider | None:
         return PROVIDERS["pkulaw"]
     if "wkinfo.com.cn" in host:
         return PROVIDERS["wkinfo"]
+    if "rmfyalk.court.gov.cn" in host:
+        return PROVIDERS["rmfyalk"]
     return None

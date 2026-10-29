@@ -57,9 +57,10 @@ def main() -> int:
     try:
         common.prepare_playwright_env(browsers_path)
         with sync_playwright() as p:
-            context = p.chromium.launch_persistent_context(
+            context = common.with_chromium_fallback(
+                p.chromium.launch_persistent_context,
+                False,
                 user_data_dir=str(profile_dir),
-                headless=False,
                 viewport={"width": 1440, "height": 1200},
                 **common.build_launch_kwargs(choice, args.chrome),
             )

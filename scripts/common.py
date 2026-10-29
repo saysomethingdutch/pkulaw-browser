@@ -179,6 +179,78 @@ def build_launch_kwargs(browser_choice: str, chrome_path: str) -> dict:
     return {}
 
 
+# --------------------------------------------------------------------------
+# Chromium build drift
+# --------------------------------------------------------------------------
+# The Python package pins one Chromium build (driver/package/browsers.json) and
+# looks for exactly that directory. The `playwright` CLI on PATH — Homebrew's,
+# npm's — installs *its own* build into the same cache. Observed 2026-10-29:
+# Python Playwright 1.60.0 wanted chromium-1223, the cache held only 1228, and
+# every headless launch died with "Executable doesn't exist" while the doctor,
+# which only asked "is any chromium-* there?", reported Chromium installed.
+# A neighbouring build drives fine, so fall back to it instead of failing.
+
+_BUILD_DIRS = {True: re.compile(r"^chromium_headless_shell-(\d+)$"), False: re.compile(r"^chromium-(\d+)$")}
+_BUILD_EXES = {
+    True: ["chrome-headless-shell-*/chrome-headless-shell", "chrome-headless-shell-*/chrome-headless-shell.exe"],
+    False: ["chrome-mac*/*.app/Contents/MacOS/*", "chrome-linux*/chrome", "chrome-win*/chrome.exe"],
+}
+
+
+def expected_chromium_revision() -> str | None:
+    """The build this Python Playwright package will look for, read from its own manifest."""
+    try:
+        import playwright
+
+        manifest = pathlib.Path(playwright.__file__).parent / "driver/package/browsers.json"
+        for b in json.loads(manifest.read_text(encoding="utf-8"))["browsers"]:
+            if b.get("name") == "chromium":
+                return str(b.get("revision"))
+    except Exception:
+        pass
+    return None
+
+
+def installed_chromium_builds(headless: bool) -> list[tuple[int, pathlib.Path]]:
+    """(revision, executable) for every installed build of one kind, newest first."""
+    roots = [pathlib.Path(p) for p in (os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),) if p]
+    roots += [BROWSERS_PATH, playwright_default_cache()]
+    found = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for d in root.iterdir():
+            m = _BUILD_DIRS[headless].match(d.name)
+            if not m:
+                continue
+            for pattern in _BUILD_EXES[headless]:
+                exe = next((e for e in d.glob(pattern) if e.is_file()), None)
+                if exe:
+                    found.setdefault(int(m.group(1)), exe)
+                    break
+    return sorted(found.items(), reverse=True)
+
+
+def with_chromium_fallback(launch, headless: bool, **kwargs):
+    """Run a Playwright launch call; on a missing pinned build, retry on an installed one.
+
+    `launch` is `p.chromium.launch` or `p.chromium.launch_persistent_context`.
+    An explicit executable_path is the caller's choice and is never second-guessed.
+    """
+    try:
+        return launch(headless=headless, **kwargs)
+    except Exception as exc:
+        if "executable_path" in kwargs or "Executable doesn't exist" not in str(exc):
+            raise
+        builds = installed_chromium_builds(headless) or installed_chromium_builds(not headless)
+        if not builds:
+            raise
+        rev, exe = builds[0]
+        print(f"chromium: pinned build {expected_chromium_revision() or '?'} missing, using installed {rev}",
+              file=sys.stderr)
+        return launch(headless=headless, executable_path=str(exe), **kwargs)
+
+
 def prepare_playwright_env(browsers_path: pathlib.Path) -> None:
     """Point Playwright at this skill's browser dir only if it really has one.
 
@@ -239,7 +311,7 @@ def browser_session(p, provider, args):
     if storage_state is None and provider.state_path.exists():
         storage_state = str(provider.state_path)
 
-    browser = p.chromium.launch(headless=not headful, **build_launch_kwargs(choice, args.chrome))
+    browser = with_chromium_fallback(p.chromium.launch, not headful, **build_launch_kwargs(choice, args.chrome))
     context = browser.new_context(storage_state=storage_state, viewport={"width": 1440, "height": 1200})
     session = Session(context, f"launch:{choice}", headful, storage_state, False)
     try:
@@ -344,12 +416,30 @@ def session_state_status(provider) -> dict:
 def fmt_expiry(expires: float) -> str:
     if not expires or expires <= 0:
         return "session"
-    return time.strftime("%Y-%m-%d", time.localtime(expires))
+    # A date alone says nothing about a cookie that lives an hour (RMFYALK).
+    fmt = "%Y-%m-%d %H:%M" if abs(expires - time.time()) < 2 * 86400 else "%Y-%m-%d"
+    return time.strftime(fmt, time.localtime(expires))
 
 
 # --------------------------------------------------------------------------
 # Validation and page classification
 # --------------------------------------------------------------------------
+
+
+def read_body(page, timeout_ms: int = 15000) -> str:
+    """Body text that survives a client-side redirect landing mid-read.
+
+    RMFYALK's logged-out list page asks the API, gets 401 and only then sends
+    itself to account.court.gov.cn — about 4s after load, i.e. right when a
+    probe reads. inner_text() on the dying document hangs to its timeout, and
+    the probe reported "error: Timeout" for what is a plain login gate.
+    """
+    try:
+        return page.locator("body").inner_text(timeout=min(timeout_ms, 5000))
+    except Exception:
+        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        page.wait_for_timeout(1000)
+        return page.locator("body").inner_text(timeout=timeout_ms)
 
 
 def looks_valid(text: str, expected: list[str], min_bytes: int) -> tuple[bool, str]:

@@ -1,24 +1,25 @@
 ---
 name: pkulaw-browser
-description: Search 北大法宝/PKULAW and 威科先行/WKINFO through a real browser and return compact, structured results. Use when a Chinese legal database is part of the task — case libraries (PKULAW `pfnl`, WKINFO `judgment-documents`) or law libraries (PKULAW `law`/`chl`, WKINFO `legislation`). Covers 类案检索 with precision filters: 同段检索 (same-paragraph), 本院认为 court-reasoning-only search, and filtering by 法院地域/案由/裁判日期. Scripts do the reading; screenshot-driven browsing is forbidden here.
+description: "Search 北大法宝/PKULAW, 威科先行/WKINFO and 人民法院案例库/RMFYALK (rmfyalk.court.gov.cn — 指导性案例 and 参考案例) through a real browser and return compact, structured results. Use when a Chinese legal database is part of the task — case libraries (PKULAW `pfnl`, WKINFO `judgment-documents`), law libraries (PKULAW `law`/`chl`, WKINFO `legislation`), or the Supreme People's Court's own 指导性案例/参考案例 by 入库编号, 案号, 裁判理由 or 裁判要旨. Covers 类案检索 with precision filters: 同段检索 (same-paragraph), 本院认为 court-reasoning-only search, and filtering by 法院地域/案由/裁判日期. Scripts do the reading; screenshot-driven browsing is forbidden here."
 ---
 
-# PKULAW / WKINFO Browser
+# PKULAW / WKINFO / 人民法院案例库 Browser
 
-Read either database with scripts, not with eyes. Every script takes
-`--provider pkulaw` (default) or `--provider wkinfo`; the provider decides the
-search URL scheme, the library names, the four failure signatures, the saved
-session path, and whether headless is allowed.
+Read these databases with scripts, not with eyes. Every script takes
+`--provider pkulaw` (default), `--provider wkinfo` or `--provider rmfyalk`; the
+provider decides the search URL scheme, the library names, the failure
+signatures, the saved session path, and whether headless is allowed.
+人民法院案例库 is read by its own script, `rmfyalk_api.py` — see its section.
 
 Run the scripts from `scripts/`. All state is absolute, under
 `~/.agents/state/pkulaw-browser/`, so the working directory does not matter.
 
 ## Hard discipline
 
-**Never drive these two sites with computer-use, claude-in-chrome, or any
+**Never drive these sites with computer-use, claude-in-chrome, or any
 screenshot/click tool.** Not as a fallback, not "just to check", not when a
 script fails. A single visual browsing session costs more tokens than a hundred
-script runs, and both sites are fully readable through the DOM.
+script runs, and every site here is fully readable through the DOM or its API.
 
 The ladder, in order. Each level is a script:
 
@@ -32,6 +33,11 @@ The ladder, in order. Each level is a script:
 
 **Then stop.** If L4 fails, report to the user: what you tried, the exit code,
 and the exact one-line command they need to run. Do not improvise a fifth level.
+
+For 人民法院案例库, L0/L1 are `rmfyalk_api.py`. It attaches when the debug port
+is up and otherwise runs headless, by itself. L2 is
+`pkulaw_chrome.py --login rmfyalk`. L3 and L4 do not apply: there is no page
+text to copy.
 
 Two budget rules:
 
@@ -51,7 +57,16 @@ command to run. `--live` additionally loads the provider's probe URL.
 
 Session lifetimes are short, which is why sessions go stale silently: WKINFO's
 `connect.sid` expires about a **day** after issue and its `autologin` family
-about a **week**.
+about a **week**; RMFYALK's token about an **hour** after the last request
+(≤4h in all), though `rmfyalk_api.py` re-mints it by itself while the SSO
+cookie lives.
+
+The doctor also names the Chromium build drift: the Python Playwright package
+pins one build (1223 for 1.60.0) while a `playwright` CLI on PATH may have
+installed another (1228). Every launch now falls back to the installed build
+(`common.with_chromium_fallback`) instead of dying with "Executable doesn't
+exist"; the stderr line `chromium: pinned build … missing, using installed …` is
+that fallback, not an error.
 
 ## Exit codes
 
@@ -161,9 +176,9 @@ mixes corpora: `module: judgment-documents` is the judgment itself, while
 not tell them apart. A search for one case number legitimately returns the
 judgment plus two commentaries on it.
 
-## Four ways these sites fail, and how to tell them apart
+## Five ways these sites fail, and how to tell them apart
 
-Three of the four return an HTTP 200 with real-looking content. Do not describe
+Four of the five return an HTTP 200 with real-looking content. Do not describe
 any of them as "no results".
 
 1. **Anti-bot shell** (PKULAW, exit 5) — ~200 bytes of `安全提示` /
@@ -185,6 +200,11 @@ any of them as "no results".
    `很抱歉，您没有权限查看全文内容` where the judgment should be. About 1.5KB of
    genuine metadata and no judgment. The metadata is still written to the file;
    the exit code tells you the text is missing.
+5. **JSON-level gate** (RMFYALK, exit 3) — every API call answers HTTP 200 with
+   `{"code":401,"msg":"未登录"}`: no redirect, no HTML, nothing a page check
+   sees. Only the JSON `code` tells you. `rmfyalk_api.py` checks it on every
+   call. A filter the API does not understand is a quieter version of the same
+   thing: it is ignored, not refused — see the RMFYALK section.
 
 ## Picking a provider and library
 
@@ -201,6 +221,14 @@ PKULAW has deeper 法规 coverage and 法宝引证; WKINFO has richer case metad
 (案件历程, 争议焦点, 本案评析) and returns full judgment text more easily. If the
 user names one, use it. If one gates or comes up dry, the other is a legitimate
 second try — separate corpora.
+
+人民法院案例库 (RMFYALK) is a different kind of source, not a third copy of the
+same judgments: ~5,600 cases the Supreme People's Court selected, edited and
+issued as 指导性案例 or 参考案例, each with a 裁判要旨/裁判要点 written for
+reuse. Go there when the question is "is there an authoritative case on this",
+when the user cites a 入库编号 or 指导性案例 number, or before relying on a
+PKULAW/WKINFO judgment, to check whether the SPC has issued a case on the same
+point. It has no statutes and no ordinary judgments.
 
 **Search URL schemes.** PKULAW uses a long query string (`SearchKeywordType`,
 `MatchType`, `RangeType`, `Library`, `Keywords`). WKINFO is terser: fulltext is
@@ -289,6 +317,83 @@ Field details, for when the script needs extending:
   filtered on `/csi/search`, and read its body. The sidebar fires its own
   request against `law.editorial` — take the one whose `indexId` is `law.case`.
 
+## 人民法院案例库 (RMFYALK) — `rmfyalk_api.py`
+
+`rmfyalk.court.gov.cn` is jQuery pages over a JSON API (`/cpws_al_api/api/`).
+The pages carry nothing worth reading, so this provider has no DOM path:
+`pkulaw_playwright.py` refuses it and names `rmfyalk_api.py`. Headless works,
+logged in or out; the 奇安信 cloud WAF in front (WZWS) did not object.
+Connections do **time out intermittently**. After a burst of test calls, roughly
+one connect in three hung for several minutes, with no error page. Whether that
+is the WAF throttling or the network path was not established. The script backs
+off and retries; if it still exits on "the site stopped answering", wait
+rather than retry.
+
+**Login.** OAuth through 人民法院互联网统一账户 (`account.court.gov.cn`): 手机号
++密码, 支付宝 or 钉钉, always by the user:
+
+```bash
+python3 pkulaw_chrome.py --login rmfyalk      # user logs in by hand
+python3 pkulaw_chrome.py --save-state rmfyalk # snapshot; headless from then on
+```
+
+The login is the JWT cookie `faxin-cpws-al-token`. Its cookie expiry is 1h and
+every call slides it; the JWT itself expires ~4h after issue. `HOLDONKEY` on
+`account.court.gov.cn` is the SSO session. While it lives, `rmfyalk_api.py`
+replays the site's own OAuth redirect on a 401, gets a fresh token with no
+password, headless, and saves it back. So a dead token is exit-3-worthy only
+when that fails too. `--refresh` does just that step and prints both expiries.
+How long `HOLDONKEY` lasts server-side is not measured yet. Saved state keeps
+only `court.gov.cn` cookies, mode 600.
+
+**Narrow, then fetch.** Count first, then rows, then sections for survivors:
+
+```bash
+python3 rmfyalk_api.py --search '劳动关系' --count-only           # 140 (指导性案例 15, 参考案例 125)
+python3 rmfyalk_api.py --reason '事实劳动关系' --lib ck --court 北京市 --frag
+python3 rmfyalk_api.py --no 2024-12-3-007-006 --fields 裁判要旨,裁判理由
+python3 rmfyalk_api.py --case-no '（2022）京02行终909号' --fields all
+python3 rmfyalk_api.py --search 劳动关系 --find-nodes court 北京
+```
+
+- Term flags, each repeatable and all ANDed (the site's 结果中检索): `--search`
+  全文, `--title`, `--reason` 裁判理由, `--facts` 基本案情, `--keyword` the
+  case's own tags, `--no` 入库编号. `--fuzzy` switches 精确 → 模糊. It is a big
+  switch: 劳动关系 goes from 140 to 2,732.
+- `--lib zdx|ck|all`: 指导性案例, 参考案例, both.
+- Facet filters `--court --cause --level --procedure --year --tag` take a name,
+  resolved against that facet *under the current query* (only nodes with hits),
+  or a raw key. A parent covers its children: `--court 北京市` (key `02`) is
+  every Beijing court. An ambiguous name is listed, not guessed. **One value
+  per facet**: a comma-joined pair came back as neither OR nor AND.
+- `--case-no` is a 高级检索 field and runs alone, with no term flags (the builder
+  enforces it). Sent the general way, it is **silently ignored**: 5,622 of
+  5,622 came back. Substrings work: `京02行终` → 6.
+- `--sort relevance|date-desc|date-asc|no-desc|no-asc`. Pages of up to 100;
+  `--max` defaults to 50.
+
+**Output.** One JSON line per case: `no` (入库编号), `type`
+(指导性案例/参考案例), `title`, `case_no`, `court`, `date`, `infos`, `holding`
+(the 裁判要旨/裁判要点, already in the list response, so triage is free),
+`status` (raw `cpws_al_status`; only `01` seen, meaning unverified), `id`, and
+with `--fields` a `sections` map. The map is keyed by the heading the page
+shows, which changes with the corpus and with 执行/调解 cases: 裁判要点 vs
+裁判要旨, 相关法条 vs 关联索引, 执行理由, 调解指引. Plus `keywords` and
+`text_adjusted` when the SPC has revised the text.
+
+**Before citing.**
+
+- **Name the corpus.** 指导性案例 are 应当参照; 参考案例 are 参考. A row's `type`
+  says which. Never call a 参考案例 a 指导性案例.
+- **Cite by 入库编号**, never by `id`: ids are re-encrypted on every response
+  (old ones still resolve), so they cannot dedupe or identify anything.
+- **关联索引 carries the 审级 history**, e.g. 一审：…（2021）京0101行初862号 /
+  二审：…. These are the underlying judgments; the 裁判理由 here is the SPC's
+  edited text of the 生效裁判, not a verbatim judgment. Quote the judgment
+  itself from PKULAW/WKINFO by those case numbers.
+- `text_adjusted` means the text was revised after first issue. Quote the
+  current text and say so.
+
 ## Reading a hit without misquoting it
 
 **Confirm which section a fragment sits in.** Fragments come from 「被告辩称」as
@@ -331,9 +436,11 @@ concluding the document lacks it.
 
 ## No direct fetch
 
-Do not fetch either site over plain HTTP. `pkulaw_fetch.py` refuses to run
-without `--chrome-copy`. Direct requests and headless automation reliably trip
-anti-bot defenses.
+Do not fetch any of these sites over plain HTTP. `pkulaw_fetch.py` refuses to
+run without `--chrome-copy`. Direct requests and headless automation reliably
+trip anti-bot defenses. The API scripts (`pkulaw_api.py`, `rmfyalk_api.py`)
+send their requests from a Playwright browser context, which shares the
+session's cookie jar, never from a bare HTTP client.
 
 ## Scripts
 
@@ -346,6 +453,9 @@ anti-bot defenses.
   filters, hit-count probing, pagination, structured full text. **Prefer this
   over `pkulaw_playwright.py --search` for any WKINFO case task that needs a
   filter, 同段, or more than the first 25 rows.**
+- `rmfyalk_api.py` — 人民法院案例库: 全文/标题/裁判理由/基本案情/入库编号/案号
+  search, 指导性/参考 split, facet filters, counts, sections per case, silent
+  token refresh. The only reader for that site.
 - `pkulaw_login.py` — one-off manual login in a dedicated Playwright profile
   (PKULAW/CARSI; cannot complete an NTLM intranet login).
 - `pkulaw_check_login.py` — definitive live check of one saved session.
@@ -355,7 +465,11 @@ anti-bot defenses.
   real Chrome profile via `browser_cookie3`. Needs the user and a Keychain
   prompt; macOS-specific. Prefer `pkulaw_chrome.py --login`.
 - `common.py` — browser lifecycle, exit codes, row and section extraction.
-- `providers.py` — per-site URLs, the four detectors, cookie names. **Add a new
-  database here**: define a `Provider`, register it in `PROVIDERS`, done.
+- `providers.py` — per-site URLs, the detectors, cookie names, the RMFYALK
+  body builder and section labels. **Add a new database here**: define a
+  `Provider`, register it in `PROVIDERS`. If its pages are empty shells over
+  an API, set `api_script` and write that script the way `rmfyalk_api.py` is
+  written.
 
-The `pkulaw_*` filenames predate WKINFO support and are not PKULAW-only.
+The `pkulaw_*` filenames predate WKINFO and RMFYALK support and are not
+PKULAW-only.

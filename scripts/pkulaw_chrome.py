@@ -129,17 +129,15 @@ def status(port: int) -> int:
 
 def login(provider_name: str, port: int, chrome: str, url: str | None) -> int:
     provider = get_provider(provider_name)
-    # WKINFO's login lives behind the intranet one-click; PKULAW has CARSI.
-    target = url or (INTRANET_URL if provider.name == "wkinfo" else provider.home_url)
+    # WKINFO's login lives behind the intranet one-click; PKULAW has CARSI;
+    # RMFYALK's list page bounces to the court system's unified account login.
+    target = url or (INTRANET_URL if provider.name == "wkinfo" else provider.login_url or provider.home_url)
     rc = start(port, chrome, target)
     if rc != common.EXIT_OK:
         return rc
     print(
         f"\nA Chrome window is open at {target}\n"
-        f"  1. Log in there by hand ("
-        + ("click the 威科先行 one-click login on the intranet page"
-           if provider.name == "wkinfo" else "use CARSI")
-        + ").\n"
+        f"  1. Log in there by hand ({provider.login_hint or 'the site login'}).\n"
         f"  2. Confirm you can load {provider.home_url} while logged in.\n"
         f"  3. Then run:  python3 pkulaw_chrome.py --save-state {provider.name}\n"
         f"     (optional — it lets headless runs work after this Chrome closes)\n"
@@ -172,9 +170,11 @@ def save_state(provider_name: str, port: int) -> int:
             # anyone, so it cannot tell a logged-in browser from a logged-out one.
             page.goto(provider.probe_url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(4000)
+            # Body first: if a redirect lands mid-read, title and URL must come
+            # from the page the body came from.
+            body = common.read_body(page)
             verdict, note = common.classify_navigation(
-                provider, provider.probe_url, page.title(), page.url,
-                page.locator("body").inner_text(timeout=15000),
+                provider, provider.probe_url, page.title(), page.url, body,
             )
             gated = verdict != common.EXIT_OK
             context.storage_state(path=str(provider.state_path))

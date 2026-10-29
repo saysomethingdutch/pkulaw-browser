@@ -123,7 +123,7 @@ class Session:
                     f"no saved session at {provider.state_path} — run "
                     f"python3 pkulaw_chrome.py --login {provider.name}"
                 )
-            self.browser = playwright.chromium.launch(headless=True)
+            self.browser = common.with_chromium_fallback(playwright.chromium.launch, True)
             self.context = self.browser.new_context(storage_state=state)
             self.mode = "headless+state"
             self._owns_browser = True

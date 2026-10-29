@@ -14,12 +14,12 @@ import sys
 from playwright.sync_api import sync_playwright
 
 import common
-from providers import get_provider
+from providers import PROVIDERS, get_provider
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check whether a saved session still works.")
-    parser.add_argument("--provider", default="pkulaw", choices=["pkulaw", "wkinfo"])
+    parser.add_argument("--provider", default="pkulaw", choices=sorted(PROVIDERS))
     parser.add_argument("--state-path", help="storage_state JSON (defaults per provider, absolute)")
     parser.add_argument("--url", help="URL to test (defaults to the provider's probe search)")
     parser.add_argument("--headful", action="store_true")
@@ -47,8 +47,10 @@ def main() -> int:
                 try:
                     page.goto(test_url, wait_until="domcontentloaded", timeout=60000)
                     page.wait_for_timeout(3500)
+                    # Body first: if a redirect lands mid-read, title and URL
+                    # must come from the page the body came from.
+                    body = common.read_body(page)
                     title, final_url = page.title(), page.url
-                    body = page.locator("body").inner_text(timeout=15000)
                 finally:
                     try:
                         page.close()
