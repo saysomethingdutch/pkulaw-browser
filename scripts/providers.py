@@ -380,6 +380,11 @@ RMFYALK_LIST = "https://rmfyalk.court.gov.cn/view/list.html"
 RMFYALK_LIBS = {"all": "cpwsAl_qb", "zdx": "cpwsAl_01", "ck": "cpwsAl_02"}
 RMFYALK_TYPES = {"01": "指导性案例", "02": "参考案例", "04": "特色案事例"}
 
+# cpws_al_status over the whole corpus (2026-10-29): 5,616 x "01", 6 x "02". All
+# six "02" are 指导性案例 titled （不再参照适用）… — 9号, 20号, 123号, 136号,
+# 139号, 204号. "01" is simply every other case; no flag on the page names it.
+RMFYALK_STATUS = {"01": "", "02": "不再参照适用"}
+
 # selectValue codes of the 一般检索 dropdown. Several (field, terms) pairs in one
 # body are ANDed — that is the site's own 结果中检索.
 RMFYALK_SEARCH_FIELDS = {
@@ -483,7 +488,9 @@ def rmfyalk_detect_login_gate(title: str, final_url: str, body_text: str) -> boo
     """Page-level gate. The API-level one is the JSON code 401 (rmfyalk_api.py)."""
     if "account.court.gov.cn" in urlparse(final_url).netloc.lower():
         return True
-    if "统一账户管理平台" in title:
+    # The account page is titled 人民法院互联网统一账户管理平台 while it loads and
+    # 统一账号中心 once its login form has rendered.
+    if "统一账户管理平台" in title or "统一账号中心" in title:
         return True
     return "您还未登录，请先" in body_text
 

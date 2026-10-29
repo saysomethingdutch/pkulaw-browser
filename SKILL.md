@@ -375,14 +375,26 @@ python3 rmfyalk_api.py --search 劳动关系 --find-nodes court 北京
 **Output.** One JSON line per case: `no` (入库编号), `type`
 (指导性案例/参考案例), `title`, `case_no`, `court`, `date`, `infos`, `holding`
 (the 裁判要旨/裁判要点, already in the list response, so triage is free),
-`status` (raw `cpws_al_status`; only `01` seen, meaning unverified), `id`, and
-with `--fields` a `sections` map. The map is keyed by the heading the page
-shows, which changes with the corpus and with 执行/调解 cases: 裁判要点 vs
-裁判要旨, 相关法条 vs 关联索引, 执行理由, 调解指引. Plus `keywords` and
-`text_adjusted` when the SPC has revised the text.
+`status`, `id`, and with `--fields` a `sections` map. `status` is
+`不再参照适用` for a withdrawn 指导性案例 and absent otherwise. A full scan
+on 2026-10-29 found 6 such cases of 5,622: 指导案例 9, 20, 123, 136, 139 and 204.
+The digest line marks them too. The `sections` map is keyed by the heading
+the page shows, verified on one case of each kind:
+
+| Case | Headings |
+|---|---|
+| 指导性案例 | 裁判要点 · 基本案情 · 裁判结果 · 裁判理由 · 相关法条 |
+| 指导性案例, 执行 | 执行实施要点 · 基本案情 · 执行结果 · 执行理由 · 相关法条 |
+| 参考案例 | 裁判要旨 · 基本案情 · 裁判理由 · 关联索引 |
+| 参考案例, 执行 | 执行要旨 · 基本案情 · 执行理由 · 关联索引 |
+| 参考案例, 调解 | 调解指引 · 基本案情 · 调解结果 · 关联索引 |
+
+Plus `keywords`, and `text_adjusted` when the SPC has revised the text.
 
 **Before citing.**
 
+- **Check `status`.** A `不再参照适用` 指导性案例 is withdrawn. It is history,
+  not authority, and it must never be cited as a case to follow.
 - **Name the corpus.** 指导性案例 are 应当参照; 参考案例 are 参考. A row's `type`
   says which. Never call a 参考案例 a 指导性案例.
 - **Cite by 入库编号**, never by `id`: ids are re-encrypted on every response

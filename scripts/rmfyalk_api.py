@@ -71,6 +71,7 @@ from providers import (
     RMFYALK_HOME,
     RMFYALK_LIBS,
     RMFYALK_SORTS,
+    RMFYALK_STATUS,
     RMFYALK_TYPES,
     get_provider,
     rmfyalk_build_search_body,
@@ -310,7 +311,9 @@ def row_record(n: int, doc: dict) -> dict:
         "court": doc.get("cpws_al_slfy_name") or "",
         "date": doc.get("cpws_al_zs_date") or "",
         "infos": infos,
-        "status": doc.get("cpws_al_status"),
+        # "" for an ordinary case; "不再参照适用" for a withdrawn 指导性案例. An
+        # unknown code is passed through raw rather than read as "fine".
+        "status": RMFYALK_STATUS.get(doc.get("cpws_al_status"), doc.get("cpws_al_status")),
         "id": doc.get("id"),
     }
     if not rec["court"]:
@@ -363,7 +366,8 @@ def add_sections(api: Api, rec: dict, fields: list[str], max_chars: int) -> None
 
 def summary(rec: dict) -> str:
     kind = (rec.get("type") or "")[:2]
-    return " | ".join(x for x in (f"{kind} {rec.get('no', '')}", rec.get("case_no"), rec.get("court"),
+    flag = f"[{rec['status']}]" if rec.get("status") else ""
+    return " | ".join(x for x in (f"{kind} {rec.get('no', '')}{flag}", rec.get("case_no"), rec.get("court"),
                                   rec.get("title", "")[:60]) if x)
 
 
